@@ -163,6 +163,7 @@ def prompt2tokens(prompt):
         elif type(prompt[0]) == str:
             idxs = tokenizer.batch_encode_plus(prompt)['input_ids']
         else:
+            print(prompt_type)
             raise ValueError(f"Don't know how to interpret prompt of type List[{type(prompt[0])}]!")
     elif prompt_type == str:
         idxs = [tokenizer.encode(prompt)]
@@ -185,13 +186,16 @@ def hf_logprobs_wrapper(model, idxs, cont_idxs=None, **args):
         prompt_idxs = idxs
         idxs = torch.cat([idxs, cont_idxs], dim=1)
 
-    r = model(idxs)
+    if 'attention_mask' in args:
+        r = model(idxs, attention_mask=args['attention_mask'])
+    else:
+        r = model(idxs)
     all_logprobs = F.log_softmax(r['logits'], dim=-1)
     logprobs = all_logprobs[:, :-1].gather(-1, idxs[:, 1:].unsqueeze(-1)).squeeze(-1)
 
     outputs = []
     for seq_idxs, lps in zip(idxs, logprobs):
-        prompt_len = prompt_idxs.size(1)
+        prompt_len = idxs.size(1)
         output = {}
         output['model'] = model.config._name_or_path
         output['text'] = tokenizer.decode(seq_idxs[prompt_len:])
@@ -209,9 +213,6 @@ def logprobs(model, prompt, **args):
     # since this is a function for getting probabilities, not generating
     # we don't allow a "max_tokens" argument
     assert('max_tokens' not in args)
-    
-    if type(prompt) != list:
-        prompt = [prompt]
     
     prompt_idxs = prompt2tokens(prompt) 
     # TODO fix this
@@ -306,6 +307,7 @@ def hf_gen_wrapper(model, idxs, max_tokens, **args):
                     output_scores=True,
                     pad_token_id=tokenizer.eos_token_id,
                     eos_token_id=tokenizer.eos_token_id,
+                    attention_mask=args.get('attention_mask', None)
                 )
 
         gen_idxs = r['sequences']
