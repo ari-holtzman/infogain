@@ -10,7 +10,7 @@ from torch.nn import functional as F
 
 import openai
 
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
+from transformers import GPT2Tokenizer, GPT2LMHeadModel, AutoTokenizer, AutoModelForCausalLM
 
 from .const import OPENAI_API
 from . import const
@@ -48,13 +48,14 @@ tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
 
 ## load local models
 def load(model_name, device='cuda'):
-    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+    model_name = const.model.get(model_name, model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     if model_name == 'j':
         model = GPTJForCausalLM.from_pretrained('EleutherAI/gpt-j-6B', torch_dtype=torch.float16)
     else:
-        model = GPT2LMHeadModel.from_pretrained(const.model[model_name])
+        model = AutoModelForCausalLM.from_pretrained(model_name)
     model = model.to(device)
-    cw_length = const.cw_length[const.model[model_name]]
+    cw_length = const.cw_length[model_name]
     return model, tokenizer, cw_length
 
 
