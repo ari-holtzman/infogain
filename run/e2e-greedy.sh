@@ -2,10 +2,8 @@ export out_dir=$1
 export model=$2
 export n_shard=$3
 let "top_worker = $n_shard-1"
-export gen_bs=$4
-export ig_bs=$5
-export print=$6
-export script=$7
+export print=$4
+export script=$5
 
 export log=$(date +'%Y-%m-%d')
 mkdir "rec/${log}"

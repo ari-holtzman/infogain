@@ -7,6 +7,8 @@ def get_pad_lens(m, pad=0):
   max_len = float('-inf')
   for row in m:
     max_len = max(max_len, len(row))
+  # makes indexing easier if everything has at least one pad
+  max_len = max_len + 1
   pad_lens = []
   for row in m:
     pad_len = max_len-len(row)

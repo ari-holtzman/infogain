@@ -23,7 +23,8 @@ parser.add_argument('--p', type=float, default=0.5)
 parser.add_argument('--gen_len', type=int, default=50)
 parser.add_argument('--model', type=str, default='n125m')
 parser.add_argument('--n_demos', type=int, default=10)
-parser.add_argument('--n_gen_bs', type=int, default=10)
+parser.add_argument('--gen_bs', type=int, default=10)
+parser.add_argument('--ig_bs', type=int, default=10)
 parser.add_argument('--device', type=str, default='cuda')
 parser.add_argument('--seed', type=int, default=0)
 parser.add_argument('--worker_id', type=int, default=None)
@@ -82,7 +83,7 @@ with torch.no_grad():
 
     gens = []
     while len(gens) < args.n_tries:
-        n = min(args.n_gen_bs, args.n_tries-len(gens)) 
+        n = min(args.gen_bs, args.n_tries-len(gens)) 
         gens.extend(lm.gen(model, prompt_idxs, args.gen_len, n=n, p=args.p))
     prob_baseline, mean_baseline, verify, = None, None, None
     for try_idx, gen in enumerate(gens):
@@ -96,7 +97,13 @@ with torch.no_grad():
             pad_lens.append(pad_len)
             cur_test_inputs.append(demo_prompt_idxs + test + gen_idxs + [0]*pad_len)
         infogain_idxs = torch.LongTensor(cur_test_inputs).to(args.device)
-        result = model(infogain_idxs)
+        if infogain_idxs.size(0) > args.ig_bs:
+            results = []
+            for ig_idx in range(math.ceil(infogain_idxs.size(0))):
+                beg = ig_idx*args.ig_bs
+                end = (ig_idx+1)*args.ig_bs
+                result = model(infogain_idxs)
+            torch.cat(results)
         vocab_size = result.logits.size(-1)
         out_logits = torch.stack([ l[-gen_len-pad_len-1:-pad_len-2] for l, pad_len in zip(result.logits, pad_lens) ])
         gen_t = torch.LongTensor(gen_idxs).repeat(len(tests), 1)[:, :-1].to(args.device)
