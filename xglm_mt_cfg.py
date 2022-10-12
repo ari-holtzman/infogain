@@ -1,4 +1,4 @@
-import random
+tpimport random
 import argparse
 
 import torch
@@ -19,7 +19,7 @@ parser.add_argument('tgt_name', type=str)
 parser.add_argument('demo_split', type=str)
 parser.add_argument('infr_split', type=str)
 parser.add_argument('out_path', type=str)
-parser.add_argument('--s', type=float, default=0.1, help='scaling factor of C-U')
+parser.add_argument('--s', type=float, default=1, help='scaling factor for PMI adjustment')
 parser.add_argument('--n_demos', type=int, default=32)
 parser.add_argument('--max_len', type=int, default=100)
 parser.add_argument('--model_name', type=str, default='facebook/xglm-7.5B')
@@ -42,7 +42,7 @@ with torch.no_grad(), open(args.out_path, 'w') as out:
        if len(prompt_ids)+args.max_len > XGLM_MAX_LENGTH:
            prompt_ids = prompt_ids[len(promt_ids)+args.max_len-XGLM_MAX_LENGTH:]
        cond_prompt_t = torch.LongTensor([prompt_ids]).to(model.device)
-       gen_ids = mt.cfg_greedy(model, args.s, cond_prompt_t, uncond_prompt_t, args.max_len)
+       gen_ids = mt.tp_greedy(model, args.s, cond_prompt_t, uncond_prompt_t, args.max_len)
        gen_str = tokenizer.decode(gen_ids[0].tolist()).split('</s>')[0].strip()
        out.write(f'{gen_str}\n')
        print(i)

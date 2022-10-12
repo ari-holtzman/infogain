@@ -28,14 +28,38 @@ def xglm_tokenize(s, tokenizer):
 def post_proc(s):
     return s.replace('</s>', '\n')
 
+def cleanup(tokens):
+    if 2 in tokens:
+        tokens = tokens[:tokens.index(2)+1]
+    return tokens
+
+def right_crop(tokens, max_length):
+    if len(tokens) > max_length:
+       tokens = tokens[len(tokens)-max_length:]
+    return tokens
+
 # Prompting
 
-def make_demo_prompt(src_points, tgt_points, src_name, tgt_name, tokenizer):
+# def make_demo_prompt(src_points, tgt_points, src_name, tgt_name, tokenizer):
+#     assert(len(src_points) == len(tgt_points))
+#     demos = []
+#     for s, t in zip(src_points, tgt_points):
+#         assert(s['id'] == t['id'])
+#         demo = f"{src_name} : {s['sentence']} {tgt_name} : {t['sentence']}"
+#         demos.append(demo)
+#     demo_prompt_ids = [2]
+#     for demo in demos:
+#       demo_prompt_ids.extend(xglm_tokenize(demo, tokenizer))
+#       demo_prompt_ids.append(2)
+#     return demo_prompt_ids
+
+
+def make_demo_prompt(src_points, tgt_points, tokenizer):
     assert(len(src_points) == len(tgt_points))
     demos = []
     for s, t in zip(src_points, tgt_points):
         assert(s['id'] == t['id'])
-        demo = f"{src_name} : {s['sentence']} {tgt_name} : {t['sentence']}"
+        demo = f"{s['sentence']} = {t['sentence']}"
         demos.append(demo)
     demo_prompt_ids = [2]
     for demo in demos:
@@ -49,6 +73,9 @@ def make_uncond_demo_prompt(tgt_points, tokenizer):
       uncond_demo_prompt_ids.extend(xglm_tokenize(t['sentence'], tokenizer))
       uncond_demo_prompt_ids.append(2)
     return uncond_demo_prompt_ids
+
+def make_infr_prompt(infr_point, tokenizer):
+    return xglm_ids(f"{infr_point['sentence']} =", tokenizer)
 
 # Logit and Probability Operations
 
@@ -81,6 +108,20 @@ def sample(model, prompt_ids, length, temp=None):
         if temp is not None:
             logits.div_(temp)
         probs = softmax(logits, dim=0)
+        next_token_id = torch.multinomial(probs, 1).item()
+        gen_ids = torch.LongTensor([ gen_ids[0].tolist() + [next_token_id] ]).to(model.device)
+    return gen_ids
+
+def p_sample(model, prompt_ids, length, p, temp=None):
+    gen_ids = torch.LongTensor([[]]).to(model.device)
+    for i in range(length):
+        cur_ids = torch.cat([prompt_ids, gen_ids], dim=1)
+        logits = model(cur_ids).logits[0][-1]
+        if temp is not None:
+            logits.div_(temp)
+        probs = softmax(logits, dim=0)
+        c_p_set = top_p_mask(probs, p).nonzero().view(-1)
+        next_token_id = c_p_set[torch.multinomial(probs[c_p_set], 1)].item()
         next_token_id = torch.multinomial(probs, 1).item()
         gen_ids = torch.LongTensor([ gen_ids[0].tolist() + [next_token_id] ]).to(model.device)
     return gen_ids
@@ -243,6 +284,65 @@ def pg_greedy(model, alpha, temp, c_ids, u_ids, length, **kwargs):
         temp_c_lls = log_softmax(c_logits / temp, dim=0)
         lls = temp_c_lls + alpha*pmi_lls
         next_token_id = lls.argmax()
+        gen_ids = torch.LongTensor([ gen_ids[0].tolist() + [next_token_id] ]).to(model.device)
+    return gen_ids
+
+def tp_greedy(model, alpha, c_ids, u_ids, length, temp=1, **kwargs):
+    gen_ids = torch.LongTensor([[]]).to(model.device)
+    for i in range(length):
+        cur_c_ids = torch.cat([c_ids, gen_ids], dim=1)
+        cur_u_ids = torch.cat([u_ids, gen_ids], dim=1)
+        c_logits = model(cur_c_ids).logits[0][-1].double()
+        torch.cuda.empty_cache()
+        u_logits = model(cur_u_ids).logits[0][-1].double()
+        c_lls = softmax(c_logits, dim=0)
+        u_lls = softmax(u_logits, dim=0)
+        c_not_u_dist = c_lls / (c_lls + u_lls)
+        c_not_u_lls = c_not_u_dist.log()
+        temp_c_lls = log_softmax(c_logits / temp, dim=0)
+        lls = temp_c_lls + alpha*c_not_u_lls
+        next_token_id = lls.argmax()
+        gen_ids = torch.LongTensor([ gen_ids[0].tolist() + [next_token_id] ]).to(model.device)
+    return gen_ids
+
+def tp_p_greedy(model, alpha, c_ids, u_ids, length, temp=1, p=0.5, **kwargs):
+    gen_ids = torch.LongTensor([[]]).to(model.device)
+    for i in range(length):
+        cur_c_ids = torch.cat([c_ids, gen_ids], dim=1)
+        cur_u_ids = torch.cat([u_ids, gen_ids], dim=1)
+        c_logits = model(cur_c_ids).logits[0][-1].double()
+        u_logits = model(cur_u_ids).logits[0][-1].double()
+        c_probs = softmax(c_logits, dim=0)
+        u_probs = softmax(u_logits, dim=0)
+        c_not_u_dist = c_probs / (c_probs + u_probs)
+        c_not_u_lls = c_not_u_dist.log()
+        temp_c_lls = log_softmax(c_logits / temp, dim=0)
+        lls = temp_c_lls + alpha*c_not_u_lls
+        c_p_set = top_p_mask(c_probs, p).nonzero().view(-1)
+        if 'tokenizer' in kwargs:
+            print(kwargs['tokenizer'].decode(c_p_set))
+        next_token_id = c_p_set[lls[c_p_set].argmax()].item()
+        gen_ids = torch.LongTensor([ gen_ids[0].tolist() + [next_token_id] ]).to(model.device)
+    return gen_ids
+
+def tp_p_sample(model, alpha, c_ids, u_ids, length, temp=1, p=0.5, **kwargs):
+    gen_ids = torch.LongTensor([[]]).to(model.device)
+    for i in range(length):
+        cur_c_ids = torch.cat([c_ids, gen_ids], dim=1)
+        cur_u_ids = torch.cat([u_ids, gen_ids], dim=1)
+        c_logits = model(cur_c_ids).logits[0][-1].double()
+        u_logits = model(cur_u_ids).logits[0][-1].double()
+        c_probs = softmax(c_logits, dim=0)
+        u_probs = softmax(u_logits, dim=0)
+        c_not_u_probs = c_probs / (c_probs + u_probs)
+        c_not_u_lls = c_not_u_probs.log()
+        temp_c_lls = softmax(c_logits / temp, dim=0)
+        lls = temp_c_lls + alpha*c_not_u_lls
+        probs = lls.exp()
+        c_p_set = top_p_mask(c_probs, p).nonzero().view(-1)
+        # if 'tokenizer' in kwargs:
+        #     print(kwargs['tokenizer'].decode(c_p_set))
+        next_token_id = c_p_set[torch.multinomial(probs[c_p_set], 1)].item()
         gen_ids = torch.LongTensor([ gen_ids[0].tolist() + [next_token_id] ]).to(model.device)
     return gen_ids
 

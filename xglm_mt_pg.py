@@ -19,6 +19,7 @@ parser.add_argument('tgt_lang', type=str)
 parser.add_argument('demo_split', type=str)
 parser.add_argument('infr_split', type=str)
 parser.add_argument('out_dir', type=str)
+parser.add_argument('--s', type=float, default=1)
 parser.add_argument('--n_demos', type=int, default=32)
 parser.add_argument('--max_len', type=int, default=100)
 parser.add_argument('--model_name', type=str, default='facebook/xglm-564M')
@@ -36,16 +37,17 @@ tgt_points = [ tgt_splits[args.demo_split][point['id']-1] for point in src_point
 tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 model = AutoModelForCausalLM.from_pretrained(args.model_name).eval().half().cuda()
 demo_prompt_ids = mt.make_demo_prompt(src_splits[args.demo_split], tgt_splits[args.demo_split], tokenizer)
+uncond_prompt_ids = mt.right_crop(demo_prompt_ids + mt.xglm_ids("=", tokenizer), XGLM_MAX_LENGTH-args.max_len)
+uncond_prompt_t = torch.LongTensor([uncond_prompt_ids]).to(model.device)
 
 with torch.no_grad(), open(args.out_dir, 'w') as out:
    for i, infr_point in enumerate(src_splits[args.infr_split]):
        if (i % args.n_workers) != args.worker_id:
            continue
        prompt_ids = demo_prompt_ids + mt.make_infr_prompt(infr_point, tokenizer)
-       if len(prompt_ids)+args.max_len > XGLM_MAX_LENGTH:
-           prompt_ids = prompt_ids[len(prompt_ids)+args.max_len-XGLM_MAX_LENGTH:]
+       prompt_ids = mt.right_crop(prompt_ids, XGLM_MAX_LENGTH-args.max_len)
        prompt_t = torch.LongTensor([prompt_ids]).to(model.device)
-       gen_ids = mt.greedy(model, prompt_t, args.max_len)
+       gen_ids = mt.tp_greedy(model, args.s, prompt_t, uncond_prompt_t, args.max_len)
        gen_str = tokenizer.decode(gen_ids[0].tolist()).split('</s>')[0].strip()
        out.write(f'{gen_str}\n')
        print(i)
