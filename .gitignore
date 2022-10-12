@@ -1,6 +1,7 @@
 data/
 gen/
 rec/
+old/
 
 **.swp
 **ipynb_checkpoints
